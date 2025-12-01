@@ -1,14 +1,19 @@
+from datetime import datetime
 import os
 import markdown2
 import pdfkit
 import re
+import subprocess
 
-repo_path = r"D:\GitBook\Unreal Engine Tips"  # Specify the path to the directory with md files
-output_pdf_path = "output.pdf"  # Specify the path for the output file
+
+repo_path = r"D:\Books"  # Specify the path to the directory with md files
+output_pdf_path = r"Books.pdf"  # Specify the path for the output file
 excluded_files = ["README.md", "SUMMARY.md"]  # Specify the files to exclude from import
-debug_html = True  # Is an output HTML file needed for debugging?
+debug_html = False  # Is an output HTML file needed for debugging?
 include_page_break = True  # Set to True to include a page break after each md file
-enable_html_processing = False  # Set to False if no HTML modifications are required
+enable_html_processing = True  # Set to False if no HTML modifications are required
+filter_created_after = datetime(2025, 1, 1)  # Only include files created after this date
+filter_created_before = datetime.now()  # Only include files created before the current moment
 
 # Settings for wkhtmltopdf
 options = {
@@ -24,9 +29,38 @@ def gather_md_files(directory):
     md_files = []
     for root, _, files in os.walk(directory):
         for file in files:
-            if file.endswith(".md") and file not in excluded_files:
-                md_files.append(os.path.join(root, file))
+            if not file.endswith(".md"):
+                continue
+            if file in excluded_files:
+                continue
+
+            full_path = os.path.join(root, file)
+            creation_time = get_git_creation_time(full_path)
+            if creation_time:
+                if creation_time < filter_created_after:
+                    continue
+                if creation_time > filter_created_before:
+                    continue
+
+            md_files.append(full_path)
+
     return md_files
+
+
+def get_git_creation_time(filepath):
+    try:
+        relative_path = os.path.relpath(filepath, repo_path)
+        timestamp = subprocess.check_output(
+            ["git", "log", "--diff-filter=A", "--follow", "--format=%ct", "--", relative_path],
+            cwd=repo_path,
+            stderr=subprocess.DEVNULL
+        ).strip()
+        if timestamp:
+            return datetime.fromtimestamp(int(timestamp))
+        return None
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        return None
+
 
 def remove_metadata(md_content):
     # Remove the metadata block if it is present
@@ -36,10 +70,14 @@ def md_to_html(md_content):
     return markdown2.markdown(md_content, extras=["fenced-code-blocks", "tables"])
 
 def convert_image_paths_to_absolute(html_content, base_path):
-    html_content = re.sub(r'<img src="(.*?)"',
-                        lambda m: f'<img src="{os.path.abspath(os.path.join(base_path, str(m.group(1))))}"',
-                        html_content)
-    return html_content
+    def repl(match):
+        rel = match.group(1)
+        abs_path = os.path.abspath(os.path.join(base_path, rel))
+        abs_path = abs_path.replace("\\", "/")  # Windows fix
+        return f'<img src="file:///{abs_path}"'
+
+    return re.sub(r'<img src="(.*?)"', repl, html_content)
+
 
 def process_html(html_content):
     # Here you can perform any necessary processing on the HTML code
