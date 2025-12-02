@@ -12,8 +12,8 @@ excluded_files = ["README.md", "SUMMARY.md"]  # Specify the files to exclude fro
 debug_html = False  # Is an output HTML file needed for debugging?
 include_page_break = True  # Set to True to include a page break after each md file
 enable_html_processing = True  # Set to False if no HTML modifications are required
-filter_created_after = datetime(2025, 1, 1)  # Only include files created after this date
-filter_created_before = datetime.now()  # Only include files created before the current moment
+filter_created_after = datetime(2025, 1, 1)  # Include only files created after this date (set to None to disable)
+filter_created_before = datetime.now()  # Include only files created before this date (set to None to disable)
 
 # Settings for wkhtmltopdf
 options = {
@@ -25,7 +25,6 @@ options = {
 }
 
 def gather_md_files(directory):
-    # Get a list of all md files
     md_files = []
     for root, _, files in os.walk(directory):
         for file in files:
@@ -35,19 +34,19 @@ def gather_md_files(directory):
                 continue
 
             full_path = os.path.join(root, file)
-            creation_time = get_git_creation_time(full_path)
-            if creation_time:
-                if creation_time < filter_created_after:
-                    continue
-                if creation_time > filter_created_before:
-                    continue
+            creation_time = get_creation_time(full_path)
+            if filter_created_after and creation_time < filter_created_after:
+                continue
+            if filter_created_before and creation_time > filter_created_before:
+                continue
 
             md_files.append(full_path)
 
     return md_files
 
 
-def get_git_creation_time(filepath):
+def get_creation_time(filepath):
+    # 1) Try to get the file creation time from Git (first commit date)
     try:
         relative_path = os.path.relpath(filepath, repo_path)
         timestamp = subprocess.check_output(
@@ -55,10 +54,26 @@ def get_git_creation_time(filepath):
             cwd=repo_path,
             stderr=subprocess.DEVNULL
         ).strip()
+
         if timestamp:
             return datetime.fromtimestamp(int(timestamp))
-        return None
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError, OSError):
+        # Git failed — fall back to OS timestamps
+        pass
+
+    # 2) OS fallback: try to get the file creation time (ctime)
+    try:
+        created_time = os.path.getctime(filepath)
+        return datetime.fromtimestamp(created_time)
+    except (OSError, ValueError):
+        pass
+
+    # 3) Final fallback: try modification time
+    try:
+        modified_time = os.path.getmtime(filepath)
+        return datetime.fromtimestamp(modified_time)
+    except (OSError, ValueError):
         return None
 
 
@@ -72,7 +87,7 @@ def md_to_html(md_content):
 def convert_image_paths_to_absolute(html_content, base_path):
     def repl(match):
         rel = match.group(1)
-        abs_path = os.path.abspath(os.path.join(base_path, rel))
+        abs_path = os.path.abspath(os.path.join(str(base_path), rel))
         abs_path = abs_path.replace("\\", "/")  # Windows fix
         return f'<img src="file:///{abs_path}"'
 
